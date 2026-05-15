@@ -120,6 +120,53 @@ impl Environment {
     {
         self.types.get(&TypeId::of::<Context>()).copied()
     }
+
+    /// Stores a driver-owned resource value in the environment.
+    ///
+    /// This is intended for integration layers that need to expose runtime
+    /// platform state, such as the current window geometry, to message
+    /// handling code. Ordinary application views should usually use
+    /// [`provides`] instead.
+    pub fn set_driver_resource<Context>(&mut self, value: Context)
+    where
+        Context: Resource,
+    {
+        let pos = self.create_slot_for_type::<Context>();
+        let slot = &mut self.slots[usize::try_from(pos).unwrap()];
+        if slot.ref_count == 0 {
+            slot.ref_count = 1;
+        }
+
+        let change_listeners = slot
+            .item
+            .take()
+            .map(|item| item.change_listeners)
+            .unwrap_or_default();
+        slot.item = Some(EnvironmentItem {
+            value: Box::new(value),
+            change_listeners,
+        });
+    }
+
+    /// Gets a shared reference to a resource in the environment.
+    pub fn get_resource<Context>(&self) -> Option<&Context>
+    where
+        Context: Resource,
+    {
+        let pos = self.types.get(&TypeId::of::<Context>()).copied()?;
+        let slot = &self.slots[usize::try_from(pos).unwrap()];
+        slot.item.as_ref()?.value.downcast_ref::<Context>()
+    }
+
+    /// Gets an exclusive reference to a resource in the environment.
+    pub fn get_resource_mut<Context>(&mut self) -> Option<&mut Context>
+    where
+        Context: Resource,
+    {
+        let pos = self.types.get(&TypeId::of::<Context>()).copied()?;
+        let slot = &mut self.slots[usize::try_from(pos).unwrap()];
+        slot.item.as_mut()?.value.downcast_mut::<Context>()
+    }
 }
 
 impl Default for Environment {

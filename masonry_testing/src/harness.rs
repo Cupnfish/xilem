@@ -154,6 +154,7 @@ pub struct TestHarness<W: Widget> {
     background_color: Color,
     panic_on_rewrite_saturation: bool,
     screenshot_tolerance: u32,
+    scale_factor: f64,
     max_screenshot_size: u32,
     action_queue: VecDeque<(ErasedAction, WidgetId)>,
     has_ime_session: bool,
@@ -192,6 +193,13 @@ pub struct TestHarnessParams {
     /// The scale factor widgets are rendered at.
     /// Defaults to 1.0.
     pub scale_factor: f64,
+    /// Whether the test harness should load fonts from the host system.
+    ///
+    /// When `false` (the default), only the bundled Roboto font is available,
+    /// which is good for reproducibility across machines. Enable this when you
+    /// need glyph-level parity with the host platform's native font rendering
+    /// (e.g. for pixel-diffing against a SwiftUI screenshot on macOS).
+    pub use_system_fonts: bool,
     /// Whether to panic when we detect a loop in [rewrite passes](masonry_core::doc::pass_system#rewrite-passes).
     ///
     /// A loop means a case where the passes keep running because some passes keep
@@ -256,6 +264,7 @@ impl TestHarnessParams {
         root_padding: 0,
         screenshot_tolerance: Self::DEFAULT_SCREENSHOT_TOLERANCE,
         scale_factor: 1.0,
+        use_system_fonts: false,
         panic_on_rewrite_saturation: true,
         max_screenshot_size: 8 * Self::KIBIBYTE,
     };
@@ -322,6 +331,19 @@ impl TestHarnessParams {
     pub const fn with_scale(self, scale_factor: f64) -> Self {
         Self {
             scale_factor,
+            ..self
+        }
+    }
+
+    /// Builder method to set `use_system_fonts`.
+    ///
+    /// Enable this when you want glyph-level parity with the host platform's
+    /// native font rendering (e.g. for pixel-diffing against a SwiftUI
+    /// screenshot). The default is `false` so reproducibility across CI
+    /// environments stays predictable.
+    pub const fn with_system_fonts(self, use_system_fonts: bool) -> Self {
+        Self {
+            use_system_fonts,
             ..self
         }
     }
@@ -401,7 +423,7 @@ impl<W: Widget> TestHarness<W> {
                 move |signal| signal_sender.send(signal).unwrap(),
                 RenderRootOptions {
                     default_properties: Arc::new(default_props),
-                    use_system_fonts: false,
+                    use_system_fonts: params.use_system_fonts,
                     size_policy: WindowSizePolicy::User,
                     size: window_size,
                     scale_factor: params.scale_factor,
@@ -415,6 +437,7 @@ impl<W: Widget> TestHarness<W> {
             background_color: params.background_color,
             root_padding: params.root_padding,
             screenshot_tolerance: params.screenshot_tolerance,
+            scale_factor: params.scale_factor,
             panic_on_rewrite_saturation: params.panic_on_rewrite_saturation,
             max_screenshot_size: params.max_screenshot_size,
             action_queue: VecDeque::new(),
@@ -552,18 +575,29 @@ impl<W: Widget> TestHarness<W> {
             (width, height)
         };
 
+        let scale_factor = self.scale_factor;
+
         let mut full_scene = Scene::new();
         {
             let (width, height) = { (f64::from(width), f64::from(height)) };
             let mut painter = Painter::new(&mut full_scene);
             painter.fill_rect(Rect::new(0.0, 0.0, width, height), self.background_color);
 
+            // Layer transforms are in logical coordinates; the final image is
+            // rendered in physical pixels. Apply the window's scale_factor on
+            // top of the layer transform so widgets painting at logical sizes
+            // scale up correctly.
             let padding_transform =
                 Affine::translate((f64::from(self.root_padding), f64::from(self.root_padding)));
+            let scale_transform = Affine::scale(scale_factor);
 
             for layer in &visual_layers.layers {
                 if let VisualLayerKind::Scene(scene) = &layer.kind {
-                    replay_transformed(scene, &mut full_scene, padding_transform * layer.transform);
+                    replay_transformed(
+                        scene,
+                        &mut full_scene,
+                        padding_transform * scale_transform * layer.transform,
+                    );
                 }
             }
         }

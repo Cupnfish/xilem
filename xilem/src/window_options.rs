@@ -1,7 +1,7 @@
 // Copyright 2025 the Xilem Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use winit::dpi::{Position, Size};
+use winit::dpi::{PhysicalPosition, Position, Size};
 use winit::window::{Cursor, Icon, Window, WindowAttributes, WindowButtons, WindowLevel};
 
 // TODO: make this a type-state builder to force Xilem::new apps to define on_close?
@@ -37,6 +37,7 @@ pub(crate) struct ReactiveWindowAttrs {
 pub(crate) struct InitialAttrs {
     inner_size: Option<Size>,
     position: Option<Position>,
+    active: bool,
     transparent: bool,
     // TODO: move window_icon to ReactiveWindowAttrs once the winit type implements PartialEq
     window_icon: Option<Icon>,
@@ -70,6 +71,7 @@ impl<State> WindowOptions<State> {
             initial: InitialAttrs {
                 inner_size: None,
                 position: None,
+                active: true,
                 transparent: false,
                 window_icon: None,
                 platform_specific: PlatformSpecificInitialWindowAttrs::default(),
@@ -148,6 +150,18 @@ impl<State> WindowOptions<State> {
         self
     }
 
+    /// Sets the initial position from physical desktop coordinates.
+    pub fn with_initial_physical_position(mut self, position: PhysicalPosition<i32>) -> Self {
+        self.initial.position = Some(Position::Physical(position));
+        self
+    }
+
+    /// Sets whether the window should request initial input focus.
+    pub fn with_initial_active(mut self, active: bool) -> Self {
+        self.initial.active = active;
+        self
+    }
+
     /// Sets the window icon.
     ///
     /// The default is `None`.
@@ -177,6 +191,7 @@ impl<State> WindowOptions<State> {
             .with_cursor(self.reactive.cursor.clone())
             .with_window_level(self.reactive.window_level)
             .with_decorations(self.reactive.decorations)
+            .with_active(self.initial.active)
             .with_transparent(self.initial.transparent)
             .with_window_icon(self.initial.window_icon.clone());
 
@@ -248,6 +263,11 @@ impl<State> WindowOptions<State> {
         if current.position != prev.position {
             tracing::warn!(
                 "attempted to change position attribute after window creation, this is not supported"
+            );
+        }
+        if current.active != prev.active {
+            tracing::warn!(
+                "attempted to change active attribute after window creation, this is not supported"
             );
         }
         if current.transparent != prev.transparent {
@@ -591,13 +611,31 @@ mod macos {
     use winit::platform::macos::WindowAttributesExtMacOS;
     use winit::window::{Window, WindowAttributes};
 
-    #[derive(Debug, Clone, Default)]
+    #[derive(Debug, Clone)]
     pub(crate) struct PlatformSpecificInitialWindowAttrs {
         pub(crate) titlebar_hidden: bool,
+        pub(crate) titlebar_buttons_hidden: bool,
         pub(crate) title_hidden: bool,
         pub(crate) fullsize_content_view: bool,
         pub(crate) titlebar_transparent: bool,
         pub(crate) movable_by_window_background: bool,
+        pub(crate) has_shadow: bool,
+        pub(crate) accepts_first_mouse: bool,
+    }
+
+    impl Default for PlatformSpecificInitialWindowAttrs {
+        fn default() -> Self {
+            Self {
+                titlebar_hidden: false,
+                titlebar_buttons_hidden: false,
+                title_hidden: false,
+                fullsize_content_view: false,
+                titlebar_transparent: false,
+                movable_by_window_background: false,
+                has_shadow: true,
+                accepts_first_mouse: true,
+            }
+        }
     }
 
     #[derive(Debug, Clone, Default)]
@@ -607,10 +645,13 @@ mod macos {
         pub(crate) fn build(&self, attrs: WindowAttributes) -> WindowAttributes {
             attrs
                 .with_titlebar_hidden(self.titlebar_hidden)
+                .with_titlebar_buttons_hidden(self.titlebar_buttons_hidden)
                 .with_title_hidden(self.title_hidden)
                 .with_fullsize_content_view(self.fullsize_content_view)
                 .with_titlebar_transparent(self.titlebar_transparent)
                 .with_movable_by_window_background(self.movable_by_window_background)
+                .with_has_shadow(self.has_shadow)
+                .with_accepts_first_mouse(self.accepts_first_mouse)
         }
 
         pub(crate) fn warn(&self, prev: &Self) {
@@ -622,6 +663,11 @@ mod macos {
             if self.title_hidden != prev.title_hidden {
                 tracing::warn!(
                     "attempted to change title_hidden after window creation, this is not supported"
+                );
+            }
+            if self.titlebar_buttons_hidden != prev.titlebar_buttons_hidden {
+                tracing::warn!(
+                    "attempted to change titlebar_buttons_hidden after window creation, this is not supported"
                 );
             }
             if self.fullsize_content_view != prev.fullsize_content_view {
@@ -637,6 +683,16 @@ mod macos {
             if self.movable_by_window_background != prev.movable_by_window_background {
                 tracing::warn!(
                     "attempted to change movable_by_window_background after window creation, this is not supported"
+                );
+            }
+            if self.has_shadow != prev.has_shadow {
+                tracing::warn!(
+                    "attempted to change has_shadow after window creation, this is not supported"
+                );
+            }
+            if self.accepts_first_mouse != prev.accepts_first_mouse {
+                tracing::warn!(
+                    "attempted to change accepts_first_mouse after window creation, this is not supported"
                 );
             }
         }
@@ -661,6 +717,9 @@ mod macos {
         /// Hides the window title.
         fn with_title_hidden(self, hidden: bool) -> Self;
 
+        /// Hides the titlebar traffic-light buttons.
+        fn with_titlebar_buttons_hidden(self, hidden: bool) -> Self;
+
         /// Allows the window content to extend into the titlebar area.
         fn with_fullsize_content_view(self, enabled: bool) -> Self;
 
@@ -669,6 +728,12 @@ mod macos {
 
         /// Lets the user drag the window by clicking anywhere on the background.
         fn with_movable_by_window_background(self, movable: bool) -> Self;
+
+        /// Sets whether the native window has a shadow.
+        fn with_has_shadow(self, has_shadow: bool) -> Self;
+
+        /// Sets whether the window accepts first mouse events.
+        fn with_accepts_first_mouse(self, accepts_first_mouse: bool) -> Self;
     }
 
     impl<S> WindowOptionsExtMacOS for super::WindowOptions<S> {
@@ -681,6 +746,12 @@ mod macos {
         #[inline]
         fn with_title_hidden(mut self, hidden: bool) -> Self {
             self.initial.platform_specific.title_hidden = hidden;
+            self
+        }
+
+        #[inline]
+        fn with_titlebar_buttons_hidden(mut self, hidden: bool) -> Self {
+            self.initial.platform_specific.titlebar_buttons_hidden = hidden;
             self
         }
 
@@ -699,6 +770,18 @@ mod macos {
         #[inline]
         fn with_movable_by_window_background(mut self, movable: bool) -> Self {
             self.initial.platform_specific.movable_by_window_background = movable;
+            self
+        }
+
+        #[inline]
+        fn with_has_shadow(mut self, has_shadow: bool) -> Self {
+            self.initial.platform_specific.has_shadow = has_shadow;
+            self
+        }
+
+        #[inline]
+        fn with_accepts_first_mouse(mut self, accepts_first_mouse: bool) -> Self {
+            self.initial.platform_specific.accepts_first_mouse = accepts_first_mouse;
             self
         }
     }

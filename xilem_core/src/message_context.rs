@@ -106,6 +106,11 @@ impl MessageCtx {
     pub fn force_take_message<T: AnyDebug>(&mut self) -> Option<DynMessage> {
         self.message.take()
     }
+
+    /// Accesses the environment carried by this message.
+    pub fn environment(&mut self) -> &mut Environment {
+        &mut self.environment
+    }
 }
 
 /// Methods used by implementations of the Xilem pattern, not directly by View implementations.

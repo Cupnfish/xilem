@@ -693,6 +693,7 @@ impl<const EDITABLE: bool> Widget for TextArea<EDITABLE> {
                     Key::Named(NamedKey::Enter) => {
                         let insert_newline = match self.insert_newline {
                             InsertNewline::OnEnter => true,
+                            InsertNewline::OnEnterExceptAction => !action_mod,
                             InsertNewline::OnShiftEnter => shift,
                             InsertNewline::Never => false,
                         };
@@ -1041,7 +1042,9 @@ impl<const EDITABLE: bool> Widget for TextArea<EDITABLE> {
     fn accessibility_role(&self) -> Role {
         if EDITABLE {
             match self.insert_newline {
-                InsertNewline::OnShiftEnter | InsertNewline::OnEnter => Role::MultilineTextInput,
+                InsertNewline::OnShiftEnter
+                | InsertNewline::OnEnter
+                | InsertNewline::OnEnterExceptAction => Role::MultilineTextInput,
                 _ => Role::TextInput,
             }
         } else {
@@ -1098,6 +1101,10 @@ pub enum InsertNewline {
     ///
     /// Note that if this is enabled, then the text area will never emit a [`TextAction::Entered`] event.
     OnEnter,
+    /// Insert a newline when the user presses Enter without the platform action modifier.
+    ///
+    /// Command+Enter on macOS and Control+Enter elsewhere emit a [`TextAction::Entered`] event.
+    OnEnterExceptAction,
     /// Insert a newline when the user presses Shift+Enter.
     OnShiftEnter,
     /// Never insert a newline.

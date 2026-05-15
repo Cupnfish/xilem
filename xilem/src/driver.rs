@@ -5,11 +5,14 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use masonry::app::RenderRoot;
 use masonry::core::{ErasedAction, WidgetId};
 use masonry::peniko::Blob;
 use masonry_winit::app::{
     AppDriver, DriverCtx, MasonryState, MasonryUserEvent, NewWindow, WindowId,
 };
+use winit::dpi::{PhysicalPosition, PhysicalSize};
+use winit::raw_window_handle::RawWindowHandle;
 
 use crate::core::{
     DynMessage, MessageCtx, MessageResult, ProxyError, RawProxy, SendMessage, View, ViewId,
@@ -17,6 +20,26 @@ use crate::core::{
 };
 use crate::window_view::{WindowView, WindowViewState};
 use crate::{AppState, Color, ViewCtx};
+
+/// Runtime geometry and native handle information for the window currently
+/// dispatching a Xilem message.
+#[derive(Clone, Copy, Debug)]
+pub struct WindowContext {
+    /// Xilem's stable window id.
+    pub window_id: WindowId,
+    /// Top-left of the window's client/content area in physical desktop pixels.
+    pub inner_position: PhysicalPosition<i32>,
+    /// Top-left of the whole platform window in physical desktop pixels.
+    pub outer_position: PhysicalPosition<i32>,
+    /// Content size in physical pixels.
+    pub inner_size: PhysicalSize<u32>,
+    /// Runtime scale factor for this window.
+    pub scale_factor: f64,
+    /// Native window handle, when winit exposes one for the platform.
+    pub raw_window_handle: Option<RawWindowHandle>,
+}
+
+impl xilem_core::Resource for WindowContext {}
 
 /// The composition root of Xilem's Masonry backend.
 ///
@@ -162,7 +185,9 @@ where
         driver_ctx: &mut DriverCtx<'_, '_>,
         view: WindowView<State>,
     ) {
+        let window_id = view.id;
         driver_ctx.create_window(self.build_window(view));
+        Self::initialize_root(driver_ctx.render_root(window_id), &self.fonts);
     }
 
     fn close_window(&mut self, window_id: WindowId, ctx: &mut DriverCtx<'_, '_>) {
@@ -216,6 +241,22 @@ where
             self.close_window(window_id, driver_ctx);
         }
     }
+
+    fn initialize_root(root: &mut RenderRoot, fonts: &[Blob<u8>]) {
+        if let Some(root_widget) = root
+            .get_layer_root(0)
+            .downcast::<masonry::widgets::Passthrough>()
+        {
+            let fallback = root_widget.inner().inner_id();
+            root.set_focus_fallback(Some(fallback));
+        }
+
+        for font in fonts {
+            // We currently don't do anything with the resulting family information,
+            // because we don't have an easy way to return this to the application.
+            drop(root.register_fonts(font.clone()));
+        }
+    }
 }
 
 impl<State, Logic, WindowIter> MasonryDriver<State, Logic>
@@ -240,6 +281,29 @@ where
             id_path,
             message,
         );
+        {
+            let handle = masonry_ctx.window(window_id).handle();
+            let raw_window_handle = {
+                use winit::raw_window_handle::HasWindowHandle;
+
+                handle.window_handle().ok().map(|handle| handle.as_raw())
+            };
+            let window_context = WindowContext {
+                window_id,
+                inner_position: handle
+                    .inner_position()
+                    .unwrap_or_else(|_| PhysicalPosition::new(0, 0)),
+                outer_position: handle
+                    .outer_position()
+                    .unwrap_or_else(|_| PhysicalPosition::new(0, 0)),
+                inner_size: handle.inner_size(),
+                scale_factor: handle.scale_factor(),
+                raw_window_handle,
+            };
+            message_context
+                .environment()
+                .set_driver_resource(window_context);
+        }
         let res = window.view.message(
             &mut window.view_state,
             &mut message_context,
@@ -356,20 +420,7 @@ where
         let fonts = std::mem::take(&mut self.fonts);
 
         for root in state.roots() {
-            if let Some(root_widget) = root
-                .get_layer_root(0)
-                .downcast::<masonry::widgets::Passthrough>()
-            {
-                let fallback = root_widget.inner().inner_id();
-                root.set_focus_fallback(Some(fallback));
-            }
-
-            // Register all provided fonts
-            for font in &fonts {
-                // We currently don't do anything with the resulting family information,
-                // because we don't have an easy way to return this to the application.
-                drop(root.register_fonts(font.clone()));
-            }
+            Self::initialize_root(root, &fonts);
         }
 
         // Calls callback functions after windows creation.

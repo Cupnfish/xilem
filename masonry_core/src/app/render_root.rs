@@ -475,7 +475,7 @@ impl RenderRoot {
         match event {
             WindowEvent::Rescale(scale_factor) => {
                 self.global_state.scale_factor = scale_factor;
-                self.request_render_all();
+                self.request_layout_all();
                 Handled::Yes
             }
             WindowEvent::Resize(size) => {
@@ -880,27 +880,23 @@ impl RenderRoot {
             .emit_signal(RenderRootSignal::RequestRedraw);
     }
 
-    pub(crate) fn request_render_all(&mut self) {
-        fn request_render_all_in(node: ArenaMut<'_, WidgetArenaNode>) {
+    pub(crate) fn request_layout_all(&mut self) {
+        fn request_layout_all_in(node: ArenaMut<'_, WidgetArenaNode>) {
             let children = node.children;
             let widget = &mut *node.item.widget;
             let state = &mut node.item.state;
 
-            state.needs_paint = true;
-            state.needs_accessibility = true;
-            state.request_pre_paint = true;
-            state.request_paint = true;
-            state.request_accessibility = true;
-            state.request_post_paint = true;
+            state.request_layout = true;
+            state.set_needs_layout(true);
 
             let id = state.id;
             recurse_on_children(id, widget, children, |node| {
-                request_render_all_in(node);
+                request_layout_all_in(node);
             });
         }
 
         let root_node = self.widget_arena.get_node_mut(self.root_id());
-        request_render_all_in(root_node);
+        request_layout_all_in(root_node);
         self.global_state
             .emit_signal(RenderRootSignal::RequestRedraw);
     }
